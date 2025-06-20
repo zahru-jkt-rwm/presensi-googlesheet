@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Absensi GFF</title>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <meta
+      name="google-signin-client_id"
+      content="YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
+    />
+    <script defer src="https://cdn.jsdelivr.net/npm/face-api.js"></script>
+  </head>
+  <body>
+    <div
+      id="g_id_onload"
+      data-client_id="YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
+      data-callback="onLogin"
+    ></div>
+    <div class="g_id_signin"></div>
+    <p id="status">Silakan login...</p>
+
+    <video id="video" width="320" height="240" autoplay muted></video><br />
+    <button id="btn">Absen</button>
+
+    <script>
+      let email = '';
+      async function onLogin(res) {
+        const p = JSON.parse(atob(res.credential.split('.')[1]));
+        email = p.email;
+        document.getElementById("status").innerText = "Login sebagai: " + email;
+        await loadModels(); startVideo();
+      }
+
+      const OFFICE = {lat: -7.797068, lng: 110.370529, radius: 100};
+      function toRad(x){return x*Math.PI/180;}
+      function geoDist(lat1, lon1, lat2, lon2){
+        const R=6371e3; const dLat=toRad(lat2-lat1);
+        const dLon=toRad(lon2-lon1);
+        const a=Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+        return R*2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      }
+
+      async function loadModels(){
+        await faceapi.nets.tinyFaceDetector.loadFromUri('models');
+        await faceapi.nets.faceRecognitionNet.loadFromUri('models');
+        await faceapi.nets.faceLandmark68Net.loadFromUri('models');
+      }
+
+      async function startVideo(){
+        const vid=document.getElementById('video');
+        const s = await navigator.mediaDevices.getUserMedia({video:{}});
+        vid.srcObject = s;
+      }
+
+      document.getElementById("btn").onclick = async () => {
+        if (!email) return alert("Login dulu ya!");
+        const vid = document.getElementById('video');
+        const det = await faceapi.detectSingleFace(vid, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
+        if (!det) return alert("Wajah tidak ketemu.");
+
+        const users = await fetchSpreadsheetUsers();
+        const descriptors = await Promise.all(users.map(u=>faceapi.fetchImage(u[2]).then(img=>faceapi.detectSingleFace(img).withFaceLandmarks().withFaceDescriptor().then(r=>[u[0],u[1],r.descriptor])));
+        const matcher = new faceapi.FaceMatcher(descriptors.map(d=>new faceapi.LabeledFaceDescriptors(d[1],[d[2]])));
+        const m = matcher.findBestMatch(det.descriptor);
+        if (m.label === 'unknown') return alert("Wajah tidak cocok.");
+
+        navigator.geolocation.getCurrentPosition(pos => {
+          const lat=pos.coords.latitude, lng=pos.coords.longitude;
+          const dist = geoDist(lat,lng, OFFICE.lat, OFFICE.lng);
+          const within = dist <= OFFICE.radius;
+          fetch('YOUR_WEB_APP_URL', {
+            method: 'POST',
+            body: JSON.stringify({ email, lat, lng, within }),
+            headers: { 'Content-Type':'application/json' }
+          }).then(()=>alert(within?'Absen sukses ✔️':'Di luar area ❗'));
+        });
+      };
+
+      async function fetchSpreadsheetUsers(){
+        return fetch('https://script.google.com/macros/s/YOUR_WEB_APP_URL?func=getUsers')
+          .then(r=>r.json());
+      }
+    </script>
+  </body>
+</html>
